@@ -19,7 +19,6 @@ export default function AuthPage() {
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [role, setRole] = useState<"user" | "vendor">("user");
   const [language, setLanguage] = useState("hi");
-  const [isOnline, setIsOnline] = useState(true);
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -38,22 +37,7 @@ export default function AuthPage() {
   const [successMessage, setSuccessMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
-  // Internet connectivity detection
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    
-    // Check initial status
-    setIsOnline(navigator.onLine);
-    
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
+
 
   // Clear messages when mode/role changes
   useEffect(() => {
@@ -83,11 +67,6 @@ export default function AuthPage() {
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!isOnline) {
-      setErrorMessage("You are offline. Please check your internet connection and try again.");
-      return;
-    }
-
     if (!isFormValid()) {
       setErrorMessage("Please fill in all required fields.");
       return;
@@ -98,67 +77,75 @@ export default function AuthPage() {
     setErrorMessage("");
 
     try {
+      console.log("Starting authentication process...");
+      console.log("Mode:", mode, "Role:", role);
+      
       if (mode === "login") {
-        const userCred = await signInWithEmailAndPassword(auth, form.email, form.password);
-        
-        // Check role in Firestore
-        const collection = role === "vendor" ? "vendors" : "users";
-        const docRef = doc(db, collection, form.email);
-        const docSnap = await getDoc(docRef);
-        
-        if (!docSnap.exists()) {
-          await signOut(auth);
-          setErrorMessage("No account found for this role. Please check your login type.");
-          return;
-        }
-        
-        setSuccessMessage("Signed in successfully!");
+        console.log("Attempting to sign in with email:", form.email);
+        await signInWithEmailAndPassword(auth, form.email, form.password);
+        setSuccessMessage("Logged in successfully!");
+        console.log("Login successful");
       } else {
-        await createUserWithEmailAndPassword(auth, form.email, form.password);
+        console.log("Attempting to create account with email:", form.email);
+        const userCredential = await createUserWithEmailAndPassword(auth, form.email, form.password);
+        const user = userCredential.user;
+        console.log("User created successfully:", user.uid);
         
-        // Save user/vendor data to Firestore
-        const collection = role === "vendor" ? "vendors" : "users";
-        const docRef = doc(db, collection, form.email);
-        const dataToSave = { 
-          ...form, 
-          role, 
-          mode, 
-          timestamp: new Date().toISOString(),
-          createdAt: new Date().toISOString()
+        const docRef = doc(db, role === "user" ? "users" : "vendors", user.uid);
+        const dataToSave = role === "user" ? {
+          name: form.name,
+          email: form.email,
+          address: form.address,
+          city: form.city,
+          pincode: form.pincode,
+          language: language,
+          role: "user",
+          createdAt: new Date().toISOString(),
+          lastLogin: new Date().toISOString()
+        } : {
+          shopName: form.shopName,
+          ownerName: form.ownerName,
+          email: form.email,
+          address: form.address,
+          city: form.city,
+          pincode: form.pincode,
+          gstin: form.gstin,
+          fssai: form.fssai,
+          language: language,
+          role: "vendor",
+          createdAt: new Date().toISOString(),
+          lastLogin: new Date().toISOString()
         };
+        
+        console.log("Saving user data to Firestore...");
         await setDoc(docRef, dataToSave);
-        setSuccessMessage("Account created and signed in successfully!");
+        setSuccessMessage("Account created successfully!");
+        console.log("Account creation completed");
       }
     } catch (error: any) {
-      console.error("Auth error:", error);
+      console.error("Authentication error details:", {
+        code: error.code,
+        message: error.message,
+        stack: error.stack
+      });
       
       // Handle specific Firebase Auth errors
-      switch (error.code) {
-        case 'auth/user-not-found':
-          setErrorMessage("No account found with this email address.");
-          break;
-        case 'auth/wrong-password':
-          setErrorMessage("Incorrect password. Please try again.");
-          break;
-        case 'auth/email-already-in-use':
-          setErrorMessage("An account with this email already exists. Please log in instead.");
-          break;
-        case 'auth/weak-password':
-          setErrorMessage("Password should be at least 6 characters long.");
-          break;
-        case 'auth/invalid-email':
-          setErrorMessage("Please enter a valid email address.");
-          break;
-        case 'auth/network-request-failed':
-        case 'auth/too-many-requests':
-          setErrorMessage("Network error. Please check your connection and try again.");
-          break;
-        default:
-          if (error.message && (error.message.includes("offline") || error.message.includes("client is offline"))) {
-            setErrorMessage("You are offline. Please check your internet connection and try again.");
-          } else {
-            setErrorMessage(error.message || "Authentication failed. Please try again.");
-          }
+      if (error.code === 'auth/user-not-found') {
+        setErrorMessage("No account found with this email. Please check your email or sign up.");
+      } else if (error.code === 'auth/wrong-password') {
+        setErrorMessage("Incorrect password. Please try again.");
+      } else if (error.code === 'auth/email-already-in-use') {
+        setErrorMessage("An account with this email already exists. Please try logging in instead.");
+      } else if (error.code === 'auth/weak-password') {
+        setErrorMessage("Password is too weak. Please use at least 6 characters.");
+      } else if (error.code === 'auth/invalid-email') {
+        setErrorMessage("Invalid email address. Please check your email format.");
+      } else if (error.code === 'auth/too-many-requests') {
+        setErrorMessage("Too many failed attempts. Please try again later.");
+      } else if (error.code === 'auth/network-request-failed') {
+        setErrorMessage("Network error. Please check your internet connection and try again.");
+      } else {
+        setErrorMessage(error.message || "Authentication failed. Please try again.");
       }
     } finally {
       setEmailLoading(false);
@@ -166,49 +153,71 @@ export default function AuthPage() {
   };
 
   const handleGoogleAuth = async () => {
-    if (!isOnline) {
-      setErrorMessage("You are offline. Please check your internet connection and try again.");
-      return;
-    }
-
     setGoogleLoading(true);
     setSuccessMessage("");
     setErrorMessage("");
 
     try {
+      console.log("Starting Google authentication...");
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
+      console.log("Google authentication successful:", user.uid);
       
-      // Check if user exists in Firestore for the selected role
-      const collection = role === "vendor" ? "vendors" : "users";
-      const docRef = doc(db, collection, user.email!);
-      const docSnap = await getDoc(docRef);
+      const docRef = doc(db, role === "user" ? "users" : "vendors", user.uid);
+      const existingDoc = await getDoc(docRef);
       
-      if (!docSnap.exists()) {
-        await signOut(auth);
-        setErrorMessage(`No ${role} account found with this Google email. Please sign up first or check your login type.`);
-        return;
+      if (!existingDoc.exists()) {
+        console.log("Creating new user document in Firestore...");
+        const dataToSave = role === "user" ? {
+          name: user.displayName || "",
+          email: user.email,
+          address: "",
+          city: "",
+          pincode: "",
+          language: language,
+          role: "user",
+          createdAt: new Date().toISOString(),
+          lastLogin: new Date().toISOString()
+        } : {
+          shopName: "",
+          ownerName: user.displayName || "",
+          email: user.email, 
+          address: "",
+          city: "",
+          pincode: "",
+          gstin: "",
+          fssai: "",
+          language: language,
+          role: "vendor",
+          createdAt: new Date().toISOString(),
+          lastLogin: new Date().toISOString()
+        };
+        await setDoc(docRef, dataToSave, { merge: true });
+        console.log("New user document created");
+      } else {
+        console.log("Updating existing user document...");
+        await setDoc(docRef, {
+          lastLogin: new Date().toISOString()
+        }, { merge: true });
+        console.log("User document updated");
       }
-      
-      // Update user data in Firestore
-      const dataToSave = { 
-        email: user.email, 
-        name: user.displayName || form.name, 
-        role, 
-        mode, 
-        timestamp: new Date().toISOString(),
-        lastLogin: new Date().toISOString()
-      };
-      await setDoc(docRef, dataToSave, { merge: true });
       setSuccessMessage("Signed in successfully with Google!");
     } catch (error: any) {
-      console.error("Google auth error:", error);
+      console.error("Google authentication error details:", {
+        code: error.code,
+        message: error.message,
+        stack: error.stack
+      });
       
       if (error.code !== 'auth/cancelled-popup-request') {
         if (error.code === 'auth/popup-closed-by-user') {
           setErrorMessage("Sign-in was cancelled. Please try again.");
-        } else if (error.message && (error.message.includes("offline") || error.message.includes("client is offline"))) {
-          setErrorMessage("You are offline. Please check your internet connection and try again.");
+        } else if (error.code === 'auth/popup-blocked') {
+          setErrorMessage("Pop-up was blocked. Please allow pop-ups for this site and try again.");
+        } else if (error.code === 'auth/account-exists-with-different-credential') {
+          setErrorMessage("An account already exists with the same email but different sign-in credentials.");
+        } else if (error.code === 'auth/network-request-failed') {
+          setErrorMessage("Network error. Please check your internet connection and try again.");
         } else {
           setErrorMessage(error.message || "Google authentication failed. Please try again.");
         }
@@ -226,33 +235,22 @@ export default function AuthPage() {
   );
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-white" style={{ background: "#fff7f0" }}>
-      <div className="w-full max-w-md p-8 rounded-2xl shadow-lg bg-white flex flex-col items-center">
-        {/* Logo and Heading */}
-        <div className="mb-6 flex flex-col items-center">
-          <span className="text-3xl font-bold tracking-wide" style={{ color: ORANGE }}>
-            Thaalo
-          </span>
-          <h2 className="mt-2 text-xl font-semibold text-gray-800">Welcome to Thaalo</h2>
+    <div className="auth-container">
+      <div className="auth-card">
+        {/* Header Section */}
+        <header className="auth-header">
+          <div className="logo-section">
+            <h1 className="logo">thaalo</h1>
+            <p className="tagline">Welcome to thaalo</p>
         </div>
+        </header>
 
-        {/* Offline Status Indicator */}
-        {!isOnline && (
-          <div className="w-full mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-            <div className="flex items-center text-red-600 text-sm">
-              <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-              </svg>
-              You are currently offline
-            </div>
-          </div>
-        )}
 
-        {/* User/Vendor Toggle */}
-        <div className="flex mb-6 w-full justify-center gap-2">
+
+        {/* Role Toggle */}
+        <div className="role-toggle">
           <button
-            className={`flex-1 py-2 rounded-l-lg font-medium transition-colors ${role === "user" ? `bg-[${ORANGE}] text-white` : "bg-white text-gray-700 border border-gray-200"}`}
-            style={role === "user" ? { background: ORANGE, color: "#fff" } : {}}
+            className={`role-btn ${role === "user" ? "active" : ""}`}
             onClick={() => setRole("user")}
             type="button"
             disabled={emailLoading || googleLoading}
@@ -260,8 +258,7 @@ export default function AuthPage() {
             User
           </button>
           <button
-            className={`flex-1 py-2 rounded-r-lg font-medium transition-colors ${role === "vendor" ? `bg-[${ORANGE}] text-white` : "bg-white text-gray-700 border border-gray-200"}`}
-            style={role === "vendor" ? { background: ORANGE, color: "#fff" } : {}}
+            className={`role-btn ${role === "vendor" ? "active" : ""}`}
             onClick={() => setRole("vendor")}
             type="button"
             disabled={emailLoading || googleLoading}
@@ -270,306 +267,723 @@ export default function AuthPage() {
           </button>
         </div>
 
-        {/* Form */}
-        <form className="w-full flex flex-col gap-4" onSubmit={handleEmailAuth}>
-          {/* Signup fields */}
-          {mode === "signup" && role === "user" && (
-            <>
-              <input
-                type="text"
-                name="name"
-                value={form.name}
-                onChange={handleInput}
-                placeholder="Full Name"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="email"
-                name="email"
-                value={form.email}
-                onChange={handleInput}
-                placeholder="Email"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="password"
-                name="password"
-                value={form.password}
-                onChange={handleInput}
-                placeholder="Password"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                minLength={6}
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="text"
-                name="address"
-                value={form.address}
-                onChange={handleInput}
-                placeholder="Address"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="text"
-                name="city"
-                value={form.city}
-                onChange={handleInput}
-                placeholder="City"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="text"
-                name="pincode"
-                value={form.pincode}
-                onChange={handleInput}
-                placeholder="Pincode"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                pattern="[0-9]{6}"
-                maxLength={6}
-                disabled={emailLoading || googleLoading}
-              />
-            </>
-          )}
-
-          {mode === "signup" && role === "vendor" && (
-            <>
-              <input
-                type="text"
-                name="shopName"
-                value={form.shopName}
-                onChange={handleInput}
-                placeholder="Shop Name"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="text"
-                name="ownerName"
-                value={form.ownerName}
-                onChange={handleInput}
-                placeholder="Owner Name"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="email"
-                name="email"
-                value={form.email}
-                onChange={handleInput}
-                placeholder="Email"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="password"
-                name="password"
-                value={form.password}
-                onChange={handleInput}
-                placeholder="Password"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                minLength={6}
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="text"
-                name="address"
-                value={form.address}
-                onChange={handleInput}
-                placeholder="Address"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="text"
-                name="city"
-                value={form.city}
-                onChange={handleInput}
-                placeholder="City"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="text"
-                name="pincode"
-                value={form.pincode}
-                onChange={handleInput}
-                placeholder="Pincode"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                pattern="[0-9]{6}"
-                maxLength={6}
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="text"
-                name="gstin"
-                value={form.gstin}
-                onChange={handleInput}
-                placeholder="GSTIN Number"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="text"
-                name="fssai"
-                value={form.fssai}
-                onChange={handleInput}
-                placeholder="FSSAI Number"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                disabled={emailLoading || googleLoading}
-              />
-            </>
-          )}
-
-          {/* Login fields */}
-          {mode === "login" && (
-            <>
-              <input
-                type="email"
-                name="email"
-                value={form.email}
-                onChange={handleInput}
-                placeholder="Email"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                disabled={emailLoading || googleLoading}
-              />
-              <input
-                type="password"
-                name="password"
-                value={form.password}
-                onChange={handleInput}
-                placeholder="Password"
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-900 placeholder-gray-500"
-                required
-                minLength={6}
-                disabled={emailLoading || googleLoading}
-              />
-            </>
-          )}
-
+        {/* Mode Toggle */}
+        <div className="mode-toggle">
           <button
-            type="submit"
-            className="w-full py-2 mt-2 rounded-lg font-semibold text-white shadow-sm transition-colors flex items-center justify-center"
-            style={{ background: ORANGE }}
-            disabled={emailLoading || googleLoading || !isOnline || !isFormValid()}
-          >
-            {emailLoading && <LoadingSpinner />}
-            {mode === "login" ? "Log In" : "Sign Up"}
-          </button>
-        </form>
-
-        <div className="w-full flex flex-col gap-2 mt-4">
-          <button
+            className={`mode-btn ${mode === "login" ? "active" : ""}`}
+            onClick={() => setMode("login")}
             type="button"
-            onClick={handleGoogleAuth}
-            className="w-full py-2 rounded-lg font-semibold text-white shadow-sm transition-colors bg-blue-600 hover:bg-blue-700 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={googleLoading || emailLoading || !isOnline}
+            disabled={emailLoading || googleLoading}
           >
-            {googleLoading && <LoadingSpinner />}
-            <svg className="w-5 h-5" viewBox="0 0 48 48">
-              <g>
-                <path d="M44.5 20H24v8.5h11.7C34.7 33.9 29.8 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 6 .9 8.3 2.7l6.2-6.2C34.2 4.5 29.3 2.5 24 2.5 12.7 2.5 3.5 11.7 3.5 23S12.7 43.5 24 43.5c10.5 0 20-8.5 20-20 0-1.3-.1-2.1-.3-3.5z" fill="#FFC107"/>
-                <path d="M6.3 14.7l7 5.1C15.1 17.1 19.2 14 24 14c3.1 0 6 .9 8.3 2.7l6.2-6.2C34.2 4.5 29.3 2.5 24 2.5 12.7 2.5 3.5 11.7 3.5 23S12.7 43.5 24 43.5c10.5 0 20-8.5 20-20 0-1.3-.1-2.1-.3-3.5z" fill="#FF3D00"/>
-                <path d="M24 43.5c5.8 0 10.7-1.9 14.7-5.2l-6.8-5.6C29.9 34.9 27.1 36 24 36c-5.7 0-10.5-3.7-12.2-8.8l-7 5.4C7.7 39.5 15.3 43.5 24 43.5z" fill="#4CAF50"/>
-                <path d="M44.5 20H24v8.5h11.7C34.7 33.9 29.8 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 6 .9 8.3 2.7l6.2-6.2C34.2 4.5 29.3 2.5 24 2.5 12.7 2.5 3.5 11.7 3.5 23S12.7 43.5 24 43.5c10.5 0 20-8.5 20-20 0-1.3-.1-2.1-.3-3.5z" fill="none"/>
-              </g>
-            </svg>
-            Sign in with Google
+            Login
+          </button>
+          <button
+            className={`mode-btn ${mode === "signup" ? "active" : ""}`}
+            onClick={() => setMode("signup")}
+            type="button"
+            disabled={emailLoading || googleLoading}
+          >
+            Sign Up
           </button>
         </div>
 
-        {/* Success Message */}
+        {/* Messages */}
         {successMessage && (
-          <div className="w-full mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-            <div className="flex items-center text-green-600 font-semibold text-sm">
-              <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-              </svg>
-              {successMessage}
-            </div>
+          <div className="message success">
+            <svg className="message-icon" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+            </svg>
+            {successMessage}
           </div>
         )}
 
-        {/* Error Message */}
         {errorMessage && (
-          <div className="w-full mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-            <div className="flex items-center text-red-600 font-semibold text-sm">
-              <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-              </svg>
-              {errorMessage}
-            </div>
+          <div className="message error">
+            <svg className="message-icon" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+            </svg>
+            {errorMessage}
           </div>
         )}
-
-        {/* Toggle Link */}
-        <div className="mt-4 text-center text-sm text-gray-600">
-          {mode === "login" ? (
-            <>
-              Don't have an account?{' '}
-              <button
-                className="text-orange-500 font-medium hover:underline"
-                onClick={() => setMode("signup")}
-                type="button"
-                disabled={emailLoading || googleLoading}
-              >
-                Sign Up
-              </button>
-            </>
-          ) : (
-            <>
-              Already have an account?{' '}
-              <button
-                className="text-orange-500 font-medium hover:underline"
-                onClick={() => setMode("login")}
-                type="button"
-                disabled={emailLoading || googleLoading}
-              >
-                Log In
-              </button>
-            </>
-          )}
-        </div>
 
         {/* Language Selector */}
-        <div className="mt-8 w-full flex flex-col items-center">
-          <label htmlFor="language" className="mb-1 text-gray-500 text-xs">
-            Language
-          </label>
+        <div className="language-selector">
+          <label htmlFor="language">Preferred Language:</label>
           <select
             id="language"
             value={language}
-            onChange={e => setLanguage(e.target.value)}
-            className="w-full px-3 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white text-gray-700"
+            onChange={(e) => setLanguage(e.target.value)}
+            className="language-select"
             disabled={emailLoading || googleLoading}
           >
-            {LANGUAGES.map(lang => (
+            {LANGUAGES.map((lang) => (
               <option key={lang.code} value={lang.code}>
                 {lang.label}
               </option>
             ))}
           </select>
         </div>
+
+        {/* Main Form */}
+        <form className="auth-form" onSubmit={handleEmailAuth}>
+          {/* User Signup Fields */}
+          {mode === "signup" && role === "user" && (
+            <div className="form-fields">
+              <div className="input-group">
+                <label htmlFor="name">Full Name</label>
+              <input
+                type="text"
+                  id="name"
+                name="name"
+                value={form.name}
+                onChange={handleInput}
+                  placeholder="Enter your full name"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+              </div>
+
+              <div className="input-group">
+                <label htmlFor="email">Email Address</label>
+              <input
+                type="email"
+                  id="email"
+                name="email"
+                value={form.email}
+                onChange={handleInput}
+                  placeholder="Enter your email"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+              </div>
+
+              <div className="input-group">
+                <label htmlFor="password">Password</label>
+              <input
+                type="password"
+                  id="password"
+                name="password"
+                value={form.password}
+                onChange={handleInput}
+                  placeholder="Enter your password"
+                required
+                minLength={6}
+                disabled={emailLoading || googleLoading}
+              />
+              </div>
+
+              <div className="input-group">
+                <label htmlFor="address">Address</label>
+              <input
+                type="text"
+                  id="address"
+                name="address"
+                value={form.address}
+                onChange={handleInput}
+                  placeholder="Enter your address"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+              </div>
+
+              <div className="input-row">
+                <div className="input-group">
+                  <label htmlFor="city">City</label>
+              <input
+                type="text"
+                    id="city"
+                name="city"
+                value={form.city}
+                onChange={handleInput}
+                placeholder="City"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+                </div>
+
+                <div className="input-group">
+                  <label htmlFor="pincode">Pincode</label>
+              <input
+                type="text"
+                    id="pincode"
+                name="pincode"
+                value={form.pincode}
+                onChange={handleInput}
+                placeholder="Pincode"
+                required
+                pattern="[0-9]{6}"
+                maxLength={6}
+                disabled={emailLoading || googleLoading}
+              />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Vendor Signup Fields */}
+          {mode === "signup" && role === "vendor" && (
+            <div className="form-fields">
+              <div className="input-group">
+                <label htmlFor="shopName">Shop Name</label>
+              <input
+                type="text"
+                  id="shopName"
+                name="shopName"
+                value={form.shopName}
+                onChange={handleInput}
+                  placeholder="Enter shop name"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+              </div>
+
+              <div className="input-group">
+                <label htmlFor="ownerName">Owner Name</label>
+              <input
+                type="text"
+                  id="ownerName"
+                name="ownerName"
+                value={form.ownerName}
+                onChange={handleInput}
+                  placeholder="Enter owner name"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+              </div>
+
+              <div className="input-group">
+                <label htmlFor="email">Email Address</label>
+              <input
+                type="email"
+                  id="email"
+                name="email"
+                value={form.email}
+                onChange={handleInput}
+                  placeholder="Enter your email"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+              </div>
+
+              <div className="input-group">
+                <label htmlFor="password">Password</label>
+              <input
+                type="password"
+                  id="password"
+                name="password"
+                value={form.password}
+                onChange={handleInput}
+                  placeholder="Enter your password"
+                required
+                minLength={6}
+                disabled={emailLoading || googleLoading}
+              />
+              </div>
+
+              <div className="input-group">
+                <label htmlFor="address">Address</label>
+              <input
+                type="text"
+                  id="address"
+                name="address"
+                value={form.address}
+                onChange={handleInput}
+                  placeholder="Enter shop address"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+              </div>
+
+              <div className="input-row">
+                <div className="input-group">
+                  <label htmlFor="city">City</label>
+              <input
+                type="text"
+                    id="city"
+                name="city"
+                value={form.city}
+                onChange={handleInput}
+                placeholder="City"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+                </div>
+
+                <div className="input-group">
+                  <label htmlFor="pincode">Pincode</label>
+              <input
+                type="text"
+                    id="pincode"
+                name="pincode"
+                value={form.pincode}
+                onChange={handleInput}
+                placeholder="Pincode"
+                required
+                pattern="[0-9]{6}"
+                maxLength={6}
+                disabled={emailLoading || googleLoading}
+              />
+                </div>
+              </div>
+
+              <div className="input-row">
+                <div className="input-group">
+                  <label htmlFor="gstin">GSTIN</label>
+              <input
+                type="text"
+                    id="gstin"
+                name="gstin"
+                value={form.gstin}
+                onChange={handleInput}
+                    placeholder="GSTIN number"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+                </div>
+
+                <div className="input-group">
+                  <label htmlFor="fssai">FSSAI</label>
+              <input
+                type="text"
+                    id="fssai"
+                name="fssai"
+                value={form.fssai}
+                onChange={handleInput}
+                    placeholder="FSSAI number"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Login Fields */}
+          {mode === "login" && (
+            <div className="form-fields">
+              <div className="input-group">
+                <label htmlFor="loginEmail">Email Address</label>
+              <input
+                type="email"
+                  id="loginEmail"
+                name="email"
+                value={form.email}
+                onChange={handleInput}
+                  placeholder="Enter your email"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+              </div>
+
+              <div className="input-group">
+                <label htmlFor="loginPassword">Password</label>
+              <input
+                type="password"
+                  id="loginPassword"
+                name="password"
+                value={form.password}
+                onChange={handleInput}
+                  placeholder="Enter your password"
+                required
+                disabled={emailLoading || googleLoading}
+              />
+              </div>
+            </div>
+          )}
+
+          {/* Submit Button */}
+          <button
+            type="submit"
+            className="submit-btn"
+            disabled={emailLoading || googleLoading || !isFormValid()}
+          >
+            {emailLoading ? (
+              <>
+                <LoadingSpinner />
+                {mode === "login" ? "Signing In..." : "Creating Account..."}
+              </>
+            ) : (
+              mode === "login" ? "Sign In" : "Create Account"
+            )}
+          </button>
+        </form>
+
+        {/* Divider */}
+        <div className="divider">
+          <span>or</span>
+        </div>
+
+        {/* Google Sign In */}
+          <button
+            type="button"
+          className="google-btn"
+            onClick={handleGoogleAuth}
+          disabled={googleLoading || emailLoading}
+        >
+          {googleLoading ? (
+            <>
+              <LoadingSpinner />
+              Signing in with Google...
+            </>
+          ) : (
+            <>
+              <svg className="google-icon" viewBox="0 0 24 24">
+                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+              </svg>
+              Continue with Google
+            </>
+          )}
+        </button>
       </div>
+
+      <style jsx>{`
+        .auth-container {
+          min-height: 100vh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: linear-gradient(135deg, #fff7f0 0%, #ffe4d6 100%);
+          padding: 20px;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .auth-card {
+          width: 100%;
+          max-width: 480px;
+          background: white;
+          border-radius: 20px;
+          box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+          padding: 40px;
+          position: relative;
+        }
+
+        .auth-header {
+          text-align: center;
+          margin-bottom: 30px;
+        }
+
+        .logo-section {
+          margin-bottom: 20px;
+        }
+
+        .logo {
+          font-size: 2.5rem;
+          font-weight: 800;
+          color: ${ORANGE};
+          margin: 0;
+          letter-spacing: -0.02em;
+        }
+
+        .tagline {
+          font-size: 1.1rem;
+          color: #666;
+          margin: 8px 0 0 0;
+          font-weight: 500;
+        }
+
+        .offline-alert {
+          background: #fef2f2;
+          border: 1px solid #fecaca;
+          border-radius: 12px;
+          padding: 12px 16px;
+          margin-bottom: 20px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: #dc2626;
+          font-size: 0.9rem;
+        }
+
+        .offline-icon {
+          width: 16px;
+          height: 16px;
+          fill: currentColor;
+        }
+
+        .role-toggle {
+          display: flex;
+          background: #f3f4f6;
+          border-radius: 12px;
+          padding: 4px;
+          margin-bottom: 20px;
+        }
+
+        .role-btn {
+          flex: 1;
+          padding: 12px 16px;
+          border: none;
+          background: transparent;
+          border-radius: 8px;
+          font-weight: 600;
+          font-size: 0.95rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          color: #6b7280;
+        }
+
+        .role-btn.active {
+          background: ${ORANGE};
+          color: white;
+          box-shadow: 0 2px 8px rgba(255, 145, 77, 0.3);
+        }
+
+        .role-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+
+        .mode-toggle {
+          display: flex;
+          background: #f3f4f6;
+          border-radius: 12px;
+          padding: 4px;
+          margin-bottom: 20px;
+        }
+
+        .mode-btn {
+          flex: 1;
+          padding: 12px 16px;
+          border: none;
+          background: transparent;
+          border-radius: 8px;
+          font-weight: 600;
+          font-size: 0.95rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          color: #6b7280;
+        }
+
+        .mode-btn.active {
+          background: ${ORANGE};
+          color: white;
+          box-shadow: 0 2px 8px rgba(255, 145, 77, 0.3);
+        }
+
+        .mode-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+
+        .message {
+          padding: 12px 16px;
+          border-radius: 12px;
+          margin-bottom: 20px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 0.9rem;
+        }
+
+        .message.success {
+          background: #f0fdf4;
+          border: 1px solid #bbf7d0;
+          color: #166534;
+        }
+
+        .message.error {
+          background: #fef2f2;
+          border: 1px solid #fecaca;
+          color: #dc2626;
+        }
+
+        .message-icon {
+          width: 16px;
+          height: 16px;
+          fill: currentColor;
+        }
+
+        .language-selector {
+          margin-bottom: 20px;
+        }
+
+        .language-selector label {
+          display: block;
+          margin-bottom: 8px;
+          font-weight: 600;
+          color: #374151;
+          font-size: 0.9rem;
+        }
+
+        .language-select {
+          width: 100%;
+          padding: 12px 16px;
+          border: 2px solid #e5e7eb;
+          border-radius: 12px;
+          background: white;
+          font-size: 0.95rem;
+          transition: border-color 0.2s ease;
+        }
+
+        .language-select:focus {
+          outline: none;
+          border-color: ${ORANGE};
+        }
+
+        .language-select:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+
+        .auth-form {
+          margin-bottom: 20px;
+        }
+
+        .form-fields {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+          margin-bottom: 24px;
+        }
+
+        .input-group {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .input-group label {
+          margin-bottom: 6px;
+          font-weight: 600;
+          color: #374151;
+          font-size: 0.9rem;
+        }
+
+        .input-group input {
+          padding: 14px 16px;
+          border: 2px solid #e5e7eb;
+          border-radius: 12px;
+          font-size: 0.95rem;
+          transition: all 0.2s ease;
+          background: white;
+        }
+
+        .input-group input:focus {
+          outline: none;
+          border-color: ${ORANGE};
+          box-shadow: 0 0 0 3px rgba(255, 145, 77, 0.1);
+        }
+
+        .input-group input:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          background: #f9fafb;
+        }
+
+        .input-group input::placeholder {
+          color: #9ca3af;
+        }
+
+        .input-row {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+        }
+
+        .submit-btn {
+          width: 100%;
+          padding: 16px;
+          background: ${ORANGE};
+          color: white;
+          border: none;
+          border-radius: 12px;
+          font-size: 1rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+        }
+
+        .submit-btn:hover:not(:disabled) {
+          background: #e67e22;
+          transform: translateY(-1px);
+          box-shadow: 0 8px 20px rgba(255, 145, 77, 0.3);
+        }
+
+        .submit-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .divider {
+          text-align: center;
+          margin: 24px 0;
+          position: relative;
+        }
+
+        .divider::before {
+          content: '';
+          position: absolute;
+          top: 50%;
+          left: 0;
+          right: 0;
+          height: 1px;
+          background: #e5e7eb;
+        }
+
+        .divider span {
+          background: white;
+          padding: 0 16px;
+          color: #6b7280;
+          font-size: 0.9rem;
+          font-weight: 500;
+        }
+
+        .google-btn {
+          width: 100%;
+          padding: 16px;
+          background: white;
+          color: #374151;
+          border: 2px solid #e5e7eb;
+          border-radius: 12px;
+          font-size: 1rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 12px;
+        }
+
+        .google-btn:hover:not(:disabled) {
+          background: #f9fafb;
+          border-color: #d1d5db;
+          transform: translateY(-1px);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .google-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .google-icon {
+          width: 20px;
+          height: 20px;
+        }
+
+        @media (max-width: 480px) {
+          .auth-card {
+            padding: 24px;
+            margin: 10px;
+          }
+
+          .input-row {
+            grid-template-columns: 1fr;
+          }
+
+          .logo {
+            font-size: 2rem;
+          }
+        }
+      `}</style>
     </div>
   );
 }
